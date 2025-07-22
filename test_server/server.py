@@ -15,23 +15,24 @@ SCOPES = ["https://www.googleapis.com/auth/drive.file"]
 # Google api .json檔案位置
 SERVICE_ACCOUNT_FILE = "./google_drive_api_json/plasma-kit-465410-b6-99aebbcf18a2.json"
 # 目標上傳資料夾 ID (從 Drive 網址取得)
-TARGET_FOLDER_ID    = "1qkKgdAFA1oPj_Lx9k1hS4ANJph5Wakfk"
+UPLOAD_FOLDER        = "1qkKgdAFA1oPj_Lx9k1hS4ANJph5Wakfk"
 
-# 建立 Drive service
+# 建立憑證
 creds = service_account.Credentials.from_service_account_file(
     SERVICE_ACCOUNT_FILE, scopes=SCOPES
 )
+# 串連服務
 drive_service = build("drive", "v3", credentials=creds)
 
 # 暫存資料夾位置
-STAGING_DIR = os.getenv("STAGING_DIR", "./temp_file")
-os.makedirs(STAGING_DIR, exist_ok=True)
+TEMP_DIRECTORY = os.getenv("STAGING_DIR", "./temp_file")
+os.makedirs(TEMP_DIRECTORY, exist_ok=True)
 
 @app.route("/")
 def index():
     return "Relay Server is up and running!"
 
-# 處理所有檔案變更事件
+# 處理所有檔案變更事件(目前無用)
 @app.route("/api/v1/event/receive", methods=["POST"])
 def receive_event():
     """
@@ -52,7 +53,7 @@ def receive_event():
 
 # 處理需上傳檔案事件
 @app.route("/api/v1/event/upload_file", methods=["POST"])
-def upload_temp():
+def upload_file_to_temp():
     """
     接收 client 上傳的檔案，並存到 ./temp。
     """
@@ -64,19 +65,55 @@ def upload_temp():
 
     # 安全檔名並存檔
     filename = secure_filename(f.filename)
-    save_path = os.path.join(STAGING_DIR, filename)
+    save_path = os.path.join(TEMP_DIRECTORY, filename)
     f.save(save_path)
 
     # 印出serverLog訊息
     app.logger.info(f"Staged file: {save_path}")
 
+    upload_file_to_drive(filename, save_path)
+
+    return jsonify({
+            "status": "server_file_uploaded",
+            "file_name": filename,
+            "server_path": save_path
+        }), 200
+
+# 處理需上傳資料夾事件
+@app.route("/api/v1/event/upload_folder", methods=["POST"])
+def upload_folder_to_temp():
+    """
+    接收 client 上傳的資料夾，並存到 ./temp。
+    """
+    data = request.get_json(force=True)
+    folder_name = data.get("folder_name")
+    
+    if not folder_name:
+        return jsonify({"error": "folder_name is required"}), 400
+
+    # server端創建資料夾
+    server_folder_name = os.path.join(TEMP_DIRECTORY, folder_name)
+    os.makedirs(server_folder_name, exist_ok=True)
+
+    # 印出serverLog訊息
+    app.logger.info(f"Created local folder: {server_folder_name}")
+
+    upload_folder_to_drive(folder_name, UPLOAD_FOLDER)
+
+    return jsonify({
+            "status": "server_folder_uploaded",
+            "file_name": folder_name,
+            "server_path": server_folder_name
+        }), 200
+
+def upload_file_to_drive(file_name, file_path):
     # 上傳到 Google Drive
     try:
         file_metadata = {
-            "name": filename,
-            "parents": [TARGET_FOLDER_ID]
+            "name": file_name,
+            "parents": [UPLOAD_FOLDER]
         }
-        media = MediaFileUpload(save_path, resumable=True)
+        media = MediaFileUpload(file_path, resumable=True)
         uploaded = drive_service.files().create(
             body=file_metadata,
             media_body=media,
@@ -89,7 +126,7 @@ def upload_temp():
 
         # 傳回client端的json檔
         return jsonify({
-            "status": "uploaded",
+            "status": "drive_uploaded",
             "file_id": file_id,
             "webViewLink": web_link
         }), 200
@@ -97,6 +134,30 @@ def upload_temp():
     except Exception as e:
         app.logger.error(f"Drive upload failed: {e}")
         return jsonify({"error": "drive upload failed", "detail": str(e)}), 500
+    
+# folder_name = 上傳資料夾名稱； UPLOAD_FOLDER = 上傳drive資料夾位置
+def upload_folder_to_drive(folder_name, UPLOAD_FOLDER):
+    try:
+        folder_metadata = {
+            "name": folder_name,
+            "mimeType": "application/vnd.google-apps.folder",
+            "parents": [UPLOAD_FOLDER]
+        }
+        folder = drive_service.files().create(
+            body=folder_metadata,
+            fields="id",
+            supportsAllDrives=True
+        ).execute()
+        # folder.get("id")為該新創建資料夾的資料夾ID
+        app.logger.info(f"Created Drive folder: id={folder.get("id")}")
+        return jsonify({
+            "status": "folder_created",
+            "local_path": folder_name,
+            "drive_folder_id": folder.get("id")
+        }), 200
+    except Exception as e:
+        app.logger.error(f"Drive folder creation failed: {e}")
+        return jsonify({"error": "drive folder creation failed", "detail": str(e)}), 500
 
 if __name__ == "__main__":
     # debug=True 僅開發時使用
