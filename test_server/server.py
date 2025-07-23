@@ -4,29 +4,47 @@ from flask import Flask, request, jsonify
 from werkzeug.utils import secure_filename
 
 # Google Drive 相關
-from google.oauth2 import service_account
+import json
+from google_auth_oauthlib.flow import InstalledAppFlow
+from google.oauth2.credentials import Credentials
+from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 
 app = Flask(__name__)
 
-# Drive 憑證與授權範圍
-SCOPES = ["https://www.googleapis.com/auth/drive.file"]
-# Google api .json檔案位置
-SERVICE_ACCOUNT_FILE = "./google_drive_api_json/plasma-kit-465410-b6-99aebbcf18a2.json"
-# 目標上傳資料夾 ID (從 Drive 網址取得)
-UPLOAD_FOLDER        = "1qkKgdAFA1oPj_Lx9k1hS4ANJph5Wakfk"
+# OAuth2 用戶端與 Token 存放路徑
+CREDS_PATH = './google_drive_api_json/client_secret_1006222831135-tc06e0j4rnlpsd07j3ilcii7h2a5i161.apps.googleusercontent.com.json'   # 從 GCP Console 下載的 OAuth client ID 檔案
+TOKEN_PATH = './google_drive_api_json/token.json'         # 程式第一次授權後儲存的使用者 token
+# 權限範圍，只限操作自己的檔案
+SCOPES = ['https://www.googleapis.com/auth/drive.file']
+
+# 建立／取得使用者憑證
+def get_user_credentials():
+    creds = None
+    if os.path.exists(TOKEN_PATH):
+        creds = Credentials.from_authorized_user_file(TOKEN_PATH, SCOPES)
+    if not creds or not creds.valid:
+        if creds and creds.expired and creds.refresh_token:
+            creds.refresh(Request())
+        else:
+            flow = InstalledAppFlow.from_client_secrets_file(CREDS_PATH, SCOPES)
+            creds = flow.run_local_server(port=0)
+        with open(TOKEN_PATH, 'w') as token_file:
+            token_file.write(creds.to_json())
+    return creds
 
 # 建立憑證
-creds = service_account.Credentials.from_service_account_file(
-    SERVICE_ACCOUNT_FILE, scopes=SCOPES
-)
+creds = get_user_credentials()
 # 串連服務
 drive_service = build("drive", "v3", credentials=creds)
 
 # 暫存資料夾位置
 TEMP_DIRECTORY = os.getenv("STAGING_DIR", "./temp_file")
 os.makedirs(TEMP_DIRECTORY, exist_ok=True)
+
+# 目標 Google Drive 子資料夾 ID
+UPLOAD_FOLDER = '1qkKgdAFA1oPj_Lx9k1hS4ANJph5Wakfk'
 
 @app.route("/")
 def index():
