@@ -105,7 +105,7 @@ def upload_folder_to_temp():
     """
     data = request.get_json(force=True)
     folder_name = data.get("folder_name")
-    
+
     if not folder_name:
         return jsonify({"error": "folder_name is required"}), 400
 
@@ -152,7 +152,7 @@ def upload_file_to_drive(file_name, file_path):
     except Exception as e:
         app.logger.error(f"Drive upload failed: {e}")
         return jsonify({"error": "drive upload failed", "detail": str(e)}), 500
-    
+
 # folder_name = 上傳資料夾名稱； UPLOAD_FOLDER = 上傳drive資料夾位置
 def upload_folder_to_drive(folder_name, UPLOAD_FOLDER):
     try:
@@ -167,7 +167,7 @@ def upload_folder_to_drive(folder_name, UPLOAD_FOLDER):
             supportsAllDrives=True
         ).execute()
         # folder.get("id")為該新創建資料夾的資料夾ID
-        app.logger.info(f"Created Drive folder: id={folder.get("id")}")
+        app.logger.info(f"Created Drive folder: id={folder.get('id')}")
         return jsonify({
             "status": "folder_created",
             "local_path": folder_name,
