@@ -1,4 +1,5 @@
 import os
+import io
 
 from flask import Flask, request, jsonify
 from werkzeug.utils import secure_filename
@@ -10,6 +11,7 @@ from google.oauth2.credentials import Credentials
 from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
+from googleapiclient.http import MediaIoBaseDownload
 
 app = Flask(__name__)
 
@@ -42,6 +44,10 @@ drive_service = build("drive", "v3", credentials=creds)
 # 暫存資料夾位置
 TEMP_DIRECTORY = os.getenv("STAGING_DIR", "./temp_file")
 os.makedirs(TEMP_DIRECTORY, exist_ok=True)
+
+# 從drive下載回server的暫存資料夾
+RECOVER_DIRECTORY = os.getenv("STAGING_DIR", "./recover")
+os.makedirs(RECOVER_DIRECTORY, exist_ok=True)
 
 # 目標 Google Drive 子資料夾 ID
 UPLOAD_FOLDER = '1qkKgdAFA1oPj_Lx9k1hS4ANJph5Wakfk'
@@ -96,6 +102,51 @@ def upload_file_to_temp():
             "file_name": filename,
             "server_path": save_path
         }), 200
+
+# 處理將drive上檔案恢復事件
+@app.route("/api/v1/event/delete_file", methods=["POST"])
+def recover_file_to_temp():
+    """
+    接收 client 刪除檔案事件，並從drive回復該檔案。
+    """
+    data = request.get_json(force=True)
+    name = data.get('file_name')
+    if not name:
+        return jsonify({'error': 'file_name is required'}), 400
+
+    # 1) 在 Drive 上搜索與名稱匹配且未被删除的文件
+    escaped_name = name.replace("'", "\\'")
+    results = drive_service.files().list(
+        q=f"name = '{escaped_name}' and trashed = false",
+        spaces='drive',
+        fields='files(id, name)',
+        pageSize=1
+    ).execute()
+    items = results.get('files', [])
+    if not items:
+        return jsonify({'error': f"no file named '{name}' found"}), 404
+
+    file_id = items[0]['id']
+    download_name = data.get('dest_name', items[0]['name'])
+    download_name = secure_filename(download_name)
+    dest_path = os.path.join(RECOVER_DIRECTORY, download_name)
+
+    # 2) 發送下載請求
+    request_drive = drive_service.files().get_media(fileId=file_id)
+    fh = io.FileIO(dest_path, 'wb')
+    downloader = MediaIoBaseDownload(fh, request_drive)
+    done = False
+    while not done:
+        status, done = downloader.next_chunk()
+
+    fh.close()
+    app.logger.info(f"Restored file '{name}' as '{dest_path}'")
+
+    return jsonify({
+        'status': 'restored',
+        'file_id': file_id,
+        'local_path': dest_path
+    }), 200
 
 # 處理需上傳資料夾事件
 @app.route("/api/v1/event/upload_folder", methods=["POST"])

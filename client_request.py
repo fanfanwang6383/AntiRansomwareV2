@@ -4,6 +4,7 @@ import json
 import requests
 
 SERVER_EVENT_receive_URL        = "http://localhost:8000/api/v1/event/receive"
+SERVER_EVENT_delete_file_URL    = "http://localhost:8000/api/v1/event/delete_file"
 SERVER_EVENT_upload_file_URL    = "http://localhost:8000/api/v1/event/upload_file"
 SERVER_EVENT_upload_folder_URL  = "http://localhost:8000/api/v1/event/upload_folder"
 
@@ -69,6 +70,19 @@ def upload_folder(src_path):
         resp = requests.post(
             SERVER_EVENT_upload_folder_URL,
             json={"folder_name": folder_name},
+            timeout=10
+        )
+        resp.raise_for_status()
+        print(f"[OK] Folder uploaded {os.path.basename(src_path)} → server: {resp.json()}")
+    except Exception as e:
+        print(f"[ERROR] Folder upload failed: {e}")
+
+def delete_file(src_path):
+    file_name = os.path.basename(src_path.rstrip(os.sep))
+    try:
+        resp = requests.post(
+            SERVER_EVENT_delete_file_URL,
+            json={"file_name": file_name},
             timeout=10
         )
         resp.raise_for_status()

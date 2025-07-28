@@ -1,3 +1,5 @@
 **/.DS_Store
 /test_server/google_drive_api_json/*
+/test_server/temp_file/*
+/test_server/recover/*
 /monitor/*

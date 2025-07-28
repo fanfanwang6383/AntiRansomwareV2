@@ -50,6 +50,7 @@ class MyHandler(FileSystemEventHandler):
         if not event.is_directory:
             print(f"[刪除] 檔案：{event.src_path}")
             send_event_on_deleted("delete_file", event.src_path)
+            delete_file(event.src_path)
 
     def on_moved(self, event):
         # modify檔案名稱
