@@ -47,11 +47,15 @@ def upload_file(src_path):
         print(f"[ERROR] File not found: {src_path}")
         return
     
+    # 不含路徑的檔案名稱
     files = {'file': (os.path.basename(src_path), open(src_path, 'rb'))}
+    # 不含檔案名稱的路徑
+    data = {'file_path': os.path.dirname(src_path)}
     try:
         resp = requests.post(
             SERVER_EVENT_upload_file_URL,
             files=files,
+            data = data,
             timeout=10
         )
         resp.raise_for_status()

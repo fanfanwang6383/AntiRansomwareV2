@@ -87,9 +87,15 @@ def upload_file_to_temp():
     if f.filename == '':
         return jsonify({"error": "empty filename"}), 400
 
+    file_path = request.form.get('file_path', '')
+    
     # 安全檔名並存檔
     filename = secure_filename(f.filename)
-    save_path = os.path.join(TEMP_DIRECTORY, filename)
+    save_dir = os.path.join(TEMP_DIRECTORY, file_path)
+    # 卻保有此資料夾路徑
+    os.makedirs(save_dir, exist_ok=True)
+    # 結合成儲存在server上的真正路徑
+    save_path = os.path.join(save_dir, filename)
     f.save(save_path)
 
     # 印出serverLog訊息

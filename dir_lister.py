@@ -16,6 +16,9 @@ def dfs_directory(path):
     tree = {}
     try:
         for entry in os.listdir(path):
+            # 忽略開頭帶有"~"的檔案
+            if entry.startswith("~"):
+                continue
             full_path = os.path.join(path, entry)
             if os.path.isdir(full_path):
                 tree[entry] = dfs_directory(full_path)
