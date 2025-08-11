@@ -41,7 +41,7 @@ creds = get_user_credentials()
 drive_service = build("drive", "v3", credentials=creds)
 
 # 暫存資料夾位置
-TEMP_DIRECTORY = os.getenv("STAGING_DIR", "./temp_file")
+TEMP_DIRECTORY = os.getenv("STAGING_DIR", "./backup")
 os.makedirs(TEMP_DIRECTORY, exist_ok=True)
 
 # 從drive下載回server的暫存資料夾
