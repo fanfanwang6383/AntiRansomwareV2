@@ -2,11 +2,17 @@ import os
 import time
 import json
 import requests
+from config_manager import *
 
-RECEIVE_API  = "http://localhost:8000/api/v1/event/receive"
-DELETE_FILE_API    = "http://localhost:8000/api/v1/event/delete_file"
-UPLOAD_FILE_API    = "http://localhost:8000/api/v1/event/upload_file"
-UPLOAD_FOLDER_API  = "http://localhost:8000/api/v1/event/upload_folder"
+config = load_config()
+
+SERVER_IP = config['server']['SERVER_IP']
+SERVER_PORT = config['server']['SERVER_PORT']
+BASE_API_URL = f"http://{SERVER_IP}:{SERVER_PORT}/api/v1/event"
+RECEIVE_API = f"{BASE_API_URL}/receive"
+DELETE_FILE_API = f"{BASE_API_URL}/delete_file"
+UPLOAD_FILE_API = f"{BASE_API_URL}/upload_file"
+UPLOAD_FOLDER_API = f"{BASE_API_URL}/upload_folder"
 
 def send_event_on_created(event_type, src_path):
     payload = {
@@ -90,9 +96,9 @@ def delete_file(src_path):
             timeout=10
         )
         resp.raise_for_status()
-        print(f"[OK] Folder uploaded {os.path.basename(src_path)} → server: {resp.json()}")
+        print(f"[OK] File recovery requested for {file_name} → server: {resp.json()}")
     except Exception as e:
-        print(f"[ERROR] Folder upload failed: {e}")
+        print(f"[ERROR] File recovery request failed: {e}")
 
 def _post(payload):
     try:

@@ -1,11 +1,12 @@
 import os
 import time
-import json
+
 
 from client_request import *
 import dir_lister
+from config_manager import *
 
-# 查看兩個json檔之間是否有不同(數量增加及檔案hash有更動會返回true)
+# 查看兩個tree之間是否有不同(數量增加及檔案hash有更動會返回true)
 def is_different_tree(first_tree_dict, second_tree_dict):
     if len(second_tree_dict) > len(first_tree_dict):
         return True
@@ -18,8 +19,8 @@ def is_different_tree(first_tree_dict, second_tree_dict):
             is_different_tree(first_tree_dict[i], second_tree_dict[i])
     return False
 
-# 比較第二個json檔與第一個json檔之間多了哪些檔案，並回傳需要新增上傳到server端的檔案list
-# 比較第二個json檔與第一個json檔之間修改了哪些檔案，並回傳需要新增上傳到server端的被修改檔案list
+# 比對多了哪些檔案，並回傳需要新增上傳到server端的檔案list
+# 比對修改了哪些檔案，並回傳需要新增上傳到server端的被修改檔案list
 def find_added_file_in_two_dict(root, first_tree_dict, second_tree_dict):
     # 新增的檔案list
     file_name_add_list = []
@@ -43,6 +44,38 @@ def find_added_file_in_two_dict(root, first_tree_dict, second_tree_dict):
             file_name_modified_list.append(root + "/" + i)
     return file_name_add_list, file_name_modified_list
 
+# 新增：比對刪除了哪些檔案，並回傳需要從server端恢復的檔案list
+def find_deleted_file_in_two_dict(root, first_tree_dict, second_tree_dict):
+    # 刪除的檔案list
+    file_name_deleted_list = []
+    for i in first_tree_dict:
+        # 若為dictionary則往內遞迴繼續尋找
+        if isinstance(first_tree_dict[i], dict) == True:
+            # 如果第二個字典中沒有這個目錄，則整個目錄都被刪除了
+            if i not in second_tree_dict:
+                # 遍歷這個目錄中的所有文件，將它們添加到刪除列表中
+                for file_path in get_all_files_in_dict(root + "/" + i, first_tree_dict[i]):
+                    file_name_deleted_list.append(file_path)
+                continue
+            # 否則遞迴檢查這個目錄
+            file_name_deleted_list.extend(find_deleted_file_in_two_dict(root + "/" + i, first_tree_dict[i], second_tree_dict[i]))
+            continue
+        # 若此檔案不在第二個json中，表示被刪除了
+        if i not in second_tree_dict:
+            # 將目錄+檔案名稱加入deleted_list
+            file_name_deleted_list.append(root + "/" + i)
+    return file_name_deleted_list
+
+# 輔助函數：獲取字典中的所有文件路徑
+def get_all_files_in_dict(root, tree_dict):
+    file_paths = []
+    for i in tree_dict:
+        if isinstance(tree_dict[i], dict):
+            file_paths.extend(get_all_files_in_dict(root + "/" + i, tree_dict[i]))
+        else:
+            file_paths.append(root + "/" + i)
+    return file_paths
+
 # 將file_list中的所有檔案上傳至server
 def upload_all_added_file(file_list):
     for i in file_list:
@@ -53,25 +86,46 @@ def upload_all_added_file(file_list):
         upload_file(i)
     return
 
+def recover_deleted_file(file_name):
+    # TODO
+    pass
+
+def recover_all_deleted_file(file_list):
+    for i in file_list:
+        if isinstance(i, (list)) == True:
+            recover_all_deleted_file(i)
+            continue
+        recover_deleted_file(i)
+    return
+
 
 if __name__ == "__main__":
-    # 要監控的目錄
-    path_to_watch = "/Users/shaneliu/Documents/GitHub/AntiRansomwareV2/monitor"
+    config = load_config()
+    monitor_path = config["client"]["MONITOR_PATH"]
+    refresh_time = int(config["client"]["REFRESH_TIME"])
+    # 確保監控目錄存在
+    os.makedirs(monitor_path, exist_ok=True)
 
-    old_tree_dict = dir_lister.dfs_directory(path_to_watch)
+    old_tree_dict = dir_lister.dfs_directory(monitor_path)
     print(old_tree_dict)
-    print(f"開始監控資料夾: {path_to_watch}")
+    print(f"開始監控資料夾: {monitor_path}")
 
     while True:
-        # 每秒檢查一次（也可做其他工作）
-        time.sleep(10)
-        new_tree_dict = dir_lister.dfs_directory(path_to_watch)
+        time.sleep(refresh_time)
+        new_tree_dict = dir_lister.dfs_directory(monitor_path)
         print(new_tree_dict)
 
+        # 檢查文件新增和修改
         if is_different_tree(old_tree_dict, new_tree_dict):
-            (add_file_list, modified_file_list) = find_added_file_in_two_dict(path_to_watch, old_tree_dict, new_tree_dict)
+            (add_file_list, modified_file_list) = find_added_file_in_two_dict(monitor_path, old_tree_dict, new_tree_dict)
             upload_all_added_file(add_file_list)
             upload_all_added_file(modified_file_list)
+        
+        # 檢查文件刪除
+        deleted_file_list = find_deleted_file_in_two_dict(monitor_path, old_tree_dict, new_tree_dict)
+        if deleted_file_list:
+            print(f"檢測到刪除的文件: {deleted_file_list}")
+            recover_all_deleted_file(deleted_file_list)
             
         old_tree_dict = new_tree_dict
 

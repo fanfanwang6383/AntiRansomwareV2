@@ -5,7 +5,6 @@ from flask import Flask, request, jsonify
 from werkzeug.utils import secure_filename
 
 # Google Drive 相關
-import json
 from google_auth_oauthlib.flow import InstalledAppFlow
 from google.oauth2.credentials import Credentials
 from google.auth.transport.requests import Request

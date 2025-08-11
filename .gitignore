@@ -5,3 +5,4 @@
 /server/venv/*
 /monitor/*
 **/__pycache__/*
+.*
