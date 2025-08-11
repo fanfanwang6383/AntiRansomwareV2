@@ -1,5 +1,7 @@
 **/.DS_Store
-/test_server/google_drive_api_json/*
-/test_server/temp_file/*
-/test_server/recover/*
+/server/google_drive_api_json/*
+/server/temp_file/*
+/server/recover/*
+/server/venv/*
 /monitor/*
+**/__pycache__/*
