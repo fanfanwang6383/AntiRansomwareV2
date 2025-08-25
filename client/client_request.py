@@ -13,6 +13,7 @@ RECEIVE_API = f"{BASE_API_URL}/receive"
 DELETE_FILE_API = f"{BASE_API_URL}/delete_file"
 UPLOAD_FILE_API = f"{BASE_API_URL}/upload_file"
 UPLOAD_FOLDER_API = f"{BASE_API_URL}/upload_folder"
+TREE_API = f"http://{SERVER_IP}:{SERVER_PORT}/api/v1/tree"
 
 def send_event_on_created(event_type, src_path):
     payload = {
@@ -99,6 +100,125 @@ def delete_file(src_path):
         print(f"[OK] File recovery requested for {file_name} → server: {resp.json()}")
     except Exception as e:
         print(f"[ERROR] File recovery request failed: {e}")
+
+def get_tree_from_server():
+    """
+    從server獲取最新的tree.json資料
+    """
+    try:
+        resp = requests.get(TREE_API, timeout=10)
+        resp.raise_for_status()
+        result = resp.json()
+        if result.get("status") == "success":
+            return result.get("tree_data", {})
+        else:
+            print(f"[ERROR] Server returned error: {result}")
+            raise Exception(f"Server returned error: {result}")
+    except Exception as e:
+        print(f"[ERROR] Failed to get tree from server: {e}")
+        raise  # 重新拋出異常，讓上層處理
+
+def send_added_files_to_server(added_items):
+    """
+    發送新增檔案事件給server
+    """
+    payload = {
+        "added_items": added_items,
+        "timestamp": int(time.time())
+    }
+    
+    try:
+        resp = requests.post(
+            f"{BASE_API_URL}/added_files",
+            headers={"Content-Type": "application/json"},
+            data=json.dumps(payload),
+            timeout=10
+        )
+        resp.raise_for_status()
+        result = resp.json()
+        if result.get("status") == "success":
+            print(f"[OK] Added files sent to server: {len(added_items)} files")
+        else:
+            print(f"[ERROR] Server returned error: {result}")
+    except Exception as e:
+        print(f"[ERROR] Failed to send added files to server: {e}")
+
+def send_modified_files_to_server(modified_items):
+    """
+    發送修改檔案事件給server
+    """
+    payload = {
+        "modified_items": modified_items,
+        "timestamp": int(time.time())
+    }
+    
+    try:
+        resp = requests.post(
+            f"{BASE_API_URL}/modified_files",
+            headers={"Content-Type": "application/json"},
+            data=json.dumps(payload),
+            timeout=10
+        )
+        resp.raise_for_status()
+        result = resp.json()
+        if result.get("status") == "success":
+            print(f"[OK] Modified files sent to server: {len(modified_items)} files")
+        else:
+            print(f"[ERROR] Server returned error: {result}")
+    except Exception as e:
+        print(f"[ERROR] Failed to send modified files to server: {e}")
+
+def send_deleted_files_to_server(deleted_items):
+    """
+    發送刪除檔案事件給server
+    """
+    payload = {
+        "deleted_items": deleted_items,
+        "timestamp": int(time.time())
+    }
+    
+    try:
+        resp = requests.post(
+            f"{BASE_API_URL}/deleted_files",
+            headers={"Content-Type": "application/json"},
+            data=json.dumps(payload),
+            timeout=10
+        )
+        resp.raise_for_status()
+        result = resp.json()
+        if result.get("status") == "success":
+            print(f"[OK] Deleted files sent to server: {len(deleted_items)} files")
+        else:
+            print(f"[ERROR] Server returned error: {result}")
+    except Exception as e:
+        print(f"[ERROR] Failed to send deleted files to server: {e}")
+
+def send_changes_to_server(added_items, modified_items, deleted_items):
+    """
+    發送變更事件給server (保留舊函數以向後相容)
+    """
+    payload = {
+        "added_items": added_items,
+        "modified_items": modified_items,
+        "deleted_items": deleted_items,
+        "timestamp": int(time.time())
+    }
+    
+    try:
+        resp = requests.post(
+            f"{BASE_API_URL}/changes",
+            headers={"Content-Type": "application/json"},
+            data=json.dumps(payload),
+            timeout=10
+        )
+        resp.raise_for_status()
+        result = resp.json()
+        if result.get("status") == "success":
+            print(f"[OK] Changes sent to server: {len(added_items)} added, {len(modified_items)} modified, {len(deleted_items)} deleted")
+        else:
+            print(f"[ERROR] Server returned error: {result}")
+    except Exception as e:
+        print(f"[ERROR] Failed to send changes to server: {e}")
 
 def _post(payload):
     try:

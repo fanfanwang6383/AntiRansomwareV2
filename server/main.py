@@ -1,5 +1,6 @@
 import os
 import io
+import json
 
 from flask import Flask, request, jsonify
 from werkzeug.utils import secure_filename
@@ -36,9 +37,9 @@ def get_user_credentials():
     return creds
 
 # 建立憑證
-creds = get_user_credentials()
+# creds = get_user_credentials()
 # 串連服務
-drive_service = build("drive", "v3", credentials=creds)
+# drive_service = build("drive", "v3", credentials=creds)
 
 # 暫存資料夾位置
 TEMP_DIRECTORY = os.getenv("STAGING_DIR", "./backup")
@@ -49,189 +50,313 @@ RECOVER_DIRECTORY = os.getenv("STAGING_DIR", "./recover")
 os.makedirs(RECOVER_DIRECTORY, exist_ok=True)
 
 # 目標 Google Drive 子資料夾 ID
-UPLOAD_FOLDER = '1qkKgdAFA1oPj_Lx9k1hS4ANJph5Wakfk'
+UPLOAD_FOLDER = '1XcWqHS1_C3GARVP7xlCrkfWm_BT1Km3e'
+
+# tree.json 檔案路徑
+TREE_JSON_PATH = os.path.join(TEMP_DIRECTORY, "tree.json")
+
+def update_tree_with_changes(tree_data, changes_payload):
+    """
+    根據變更事件更新 tree.json
+    """
+    def add_item_to_tree(tree, path_parts, item_data):
+        """遞迴添加項目到tree中"""
+        if len(path_parts) == 1:
+            # 到達檔案/資料夾名稱
+            if item_data['type'] == 'file':
+                tree[path_parts[0]] = item_data['hash']
+            else:  # folder
+                tree[path_parts[0]] = {}
+        else:
+            # 還有更深層的路徑
+            current_dir = path_parts[0]
+            if current_dir not in tree:
+                tree[current_dir] = {}
+            add_item_to_tree(tree[current_dir], path_parts[1:], item_data)
+    
+    def remove_item_from_tree(tree, path_parts):
+        """遞迴從tree中移除項目"""
+        if len(path_parts) == 1:
+            # 到達檔案/資料夾名稱
+            if path_parts[0] in tree:
+                del tree[path_parts[0]]
+        else:
+            # 還有更深層的路徑
+            current_dir = path_parts[0]
+            if current_dir in tree and isinstance(tree[current_dir], dict):
+                remove_item_from_tree(tree[current_dir], path_parts[1:])
+    
+    # 處理新增項目
+    for item in changes_payload.get('added_items', []):
+        path_parts = item['path'].split('/')
+        add_item_to_tree(tree_data, path_parts, item)
+    
+    # 處理修改項目
+    for item in changes_payload.get('modified_items', []):
+        if item.get('action') == 'renamed':
+            # 處理重命名
+            old_path_parts = item['old_path'].split('/')
+            new_path_parts = item['path'].split('/')
+            
+            # 先移除舊路徑
+            remove_item_from_tree(tree_data, old_path_parts)
+            # 再添加新路徑
+            add_item_to_tree(tree_data, new_path_parts, item)
+        else:
+            # 處理一般修改
+            path_parts = item['path'].split('/')
+            if len(path_parts) == 1:
+                # 根目錄檔案
+                tree_data[path_parts[0]] = item['hash']
+            else:
+                # 子目錄檔案
+                current = tree_data
+                for part in path_parts[:-1]:
+                    if part not in current:
+                        current[part] = {}
+                    current = current[part]
+                current[path_parts[-1]] = item['hash']
+    
+    # 處理刪除項目
+    for item in changes_payload.get('deleted_items', []):
+        path_parts = item['path'].split('/')
+        remove_item_from_tree(tree_data, path_parts)
+    
+    return tree_data
 
 @app.route("/")
 def index():
     return "Relay Server is up and running!"
 
-# 處理所有檔案變更事件(目前無用)
-@app.route("/api/v1/event/receive", methods=["POST"])
-def receive_event():
+# 讀取或創建 tree.json 檔案
+@app.route("/api/v1/tree", methods=["GET"])
+def get_tree():
     """
-    接收 client 送來的檔案事件，修改檔案名稱也會
+    讀取 server 資料夾底下的 tree.json，如果沒有就新增一個空的
+    """
+    try:
+        if os.path.exists(TREE_JSON_PATH):
+            # 如果檔案存在，讀取內容
+            with open(TREE_JSON_PATH, 'r', encoding='utf-8') as f:
+                tree_data = json.load(f)
+            app.logger.info(f"Read existing tree.json: {TREE_JSON_PATH}")
+        else:
+            # 如果檔案不存在，創建一個空的 tree.json
+            tree_data = {}
+            with open(TREE_JSON_PATH, 'w', encoding='utf-8') as f:
+                json.dump(tree_data, f, indent=2, ensure_ascii=False)
+            app.logger.info(f"Created new empty tree.json: {TREE_JSON_PATH}")
+        
+        return jsonify({
+            "status": "success",
+            "tree_data": tree_data,
+            "file_path": TREE_JSON_PATH
+        }), 200
+        
+    except Exception as e:
+        app.logger.error(f"Error handling tree.json: {e}")
+        return jsonify({
+            "error": "Failed to read or create tree.json",
+            "detail": str(e)
+        }), 500
+
+# 處理變更事件並更新 tree.json
+@app.route("/api/v1/event/changes", methods=["POST"])
+def handle_changes():
+    """
+    接收 client 送來的變更事件，更新 tree.json
     範例 payload:
     {
-        "event_type": 'move_file',
-        "src_path": 'monitor\\001\\test.txt',
-        "dest_path": 'monitor\\001\\test01.txt',
-        "timestamp": 1751784655)
+        "added_items": [{"type": "file", "path": "test.txt", "hash": "abc123"}],
+        "modified_items": [{"type": "file", "path": "test.txt", "hash": "def456"}],
+        "deleted_items": [{"type": "file", "path": "old.txt", "hash": "ghi789"}],
+        "timestamp": 1751784655
     }
     """
-    payload = request.get_json(force=True)
-    # 印出serverLog訊息
-    app.logger.info(f"Received event: {payload}")
-    # # 傳回client端的json檔
-    return jsonify({"status": "ok"}), 200
-
-# 處理需上傳檔案事件
-@app.route("/api/v1/event/upload_file", methods=["POST"])
-def upload_file_to_temp():
-    """
-    接收 client 上傳的檔案，並存到 ./temp。
-    """
-    if 'file' not in request.files:
-        return jsonify({"error": "no file part"}), 400
-    f = request.files['file']
-    if f.filename == '':
-        return jsonify({"error": "empty filename"}), 400
-
-    file_path = request.form.get('file_path', '')
-    
-    # 安全檔名並存檔
-    filename = secure_filename(f.filename)
-    save_dir = os.path.join(TEMP_DIRECTORY, file_path)
-    # 卻保有此資料夾路徑
-    os.makedirs(save_dir, exist_ok=True)
-    # 結合成儲存在server上的真正路徑
-    save_path = os.path.join(save_dir, filename)
-    f.save(save_path)
-
-    # 印出serverLog訊息
-    app.logger.info(f"Staged file: {save_path}")
-
-    upload_file_to_drive(filename, save_path)
-
-    return jsonify({
-            "status": "server_file_uploaded",
-            "file_name": filename,
-            "server_path": save_path
-        }), 200
-
-# 處理將drive上檔案恢復事件
-@app.route("/api/v1/event/delete_file", methods=["POST"])
-def recover_file_to_temp():
-    """
-    接收 client 刪除檔案事件，並從drive回復該檔案。
-    """
-    data = request.get_json(force=True)
-    name = data.get('file_name')
-    if not name:
-        return jsonify({'error': 'file_name is required'}), 400
-
-    # 1) 在 Drive 上搜索與名稱匹配且未被删除的文件
-    escaped_name = name.replace("'", "\\'")
-    results = drive_service.files().list(
-        q=f"name = '{escaped_name}' and trashed = false",
-        spaces='drive',
-        fields='files(id, name)',
-        pageSize=1
-    ).execute()
-    items = results.get('files', [])
-    if not items:
-        return jsonify({'error': f"no file named '{name}' found"}), 404
-
-    file_id = items[0]['id']
-    download_name = data.get('dest_name', items[0]['name'])
-    download_name = secure_filename(download_name)
-    dest_path = os.path.join(RECOVER_DIRECTORY, download_name)
-
-    # 2) 發送下載請求
-    request_drive = drive_service.files().get_media(fileId=file_id)
-    fh = io.FileIO(dest_path, 'wb')
-    downloader = MediaIoBaseDownload(fh, request_drive)
-    done = False
-    while not done:
-        status, done = downloader.next_chunk()
-
-    fh.close()
-    app.logger.info(f"Restored file '{name}' as '{dest_path}'")
-
-    return jsonify({
-        'status': 'restored',
-        'file_id': file_id,
-        'local_path': dest_path
-    }), 200
-
-# 處理需上傳資料夾事件
-@app.route("/api/v1/event/upload_folder", methods=["POST"])
-def upload_folder_to_temp():
-    """
-    接收 client 上傳的資料夾，並存到 ./temp。
-    """
-    data = request.get_json(force=True)
-    folder_name = data.get("folder_name")
-
-    if not folder_name:
-        return jsonify({"error": "folder_name is required"}), 400
-
-    # server端創建資料夾
-    server_folder_name = os.path.join(TEMP_DIRECTORY, folder_name)
-    os.makedirs(server_folder_name, exist_ok=True)
-
-    # 印出serverLog訊息
-    app.logger.info(f"Created local folder: {server_folder_name}")
-
-    upload_folder_to_drive(folder_name, UPLOAD_FOLDER)
-
-    return jsonify({
-            "status": "server_folder_uploaded",
-            "file_name": folder_name,
-            "server_path": server_folder_name
-        }), 200
-
-def upload_file_to_drive(file_name, file_path):
-    # 上傳到 Google Drive
     try:
-        file_metadata = {
-            "name": file_name,
-            "parents": [UPLOAD_FOLDER]
-        }
-        media = MediaFileUpload(file_path, resumable=True)
-        uploaded = drive_service.files().create(
-            body=file_metadata,
-            media_body=media,
-            fields="id, webViewLink"
-        ).execute()
-        file_id = uploaded.get("id")
-        web_link = uploaded.get("webViewLink", "")
-        # 印出serverLog訊息
-        app.logger.info(f"Uploaded to Drive: id={file_id}")
-
-        # 傳回client端的json檔
+        payload = request.get_json(force=True)
+        app.logger.info(f"Received changes: {len(payload.get('added_items', []))} added, {len(payload.get('modified_items', []))} modified, {len(payload.get('deleted_items', []))} deleted")
+        
+        # 讀取現有的 tree.json
+        if os.path.exists(TREE_JSON_PATH):
+            with open(TREE_JSON_PATH, 'r', encoding='utf-8') as f:
+                tree_data = json.load(f)
+        else:
+            tree_data = {}
+        
+        # 更新 tree.json
+        updated_tree = update_tree_with_changes(tree_data, payload)
+        
+        # 儲存更新後的 tree.json
+        with open(TREE_JSON_PATH, 'w', encoding='utf-8') as f:
+            json.dump(updated_tree, f, indent=2, ensure_ascii=False)
+        
+        app.logger.info(f"Updated tree.json with changes")
+        
+        # TODO: 未來可以在這裡添加其他處理邏輯
+        # 例如：
+        # - 備份檔案到 Google Drive
+        # - 發送通知
+        # - 記錄審計日誌
+        # - 觸發其他服務
+        
         return jsonify({
-            "status": "drive_uploaded",
-            "file_id": file_id,
-            "webViewLink": web_link
+            "status": "success",
+            "message": "Tree updated successfully",
+            "changes_processed": {
+                "added": len(payload.get('added_items', [])),
+                "modified": len(payload.get('modified_items', [])),
+                "deleted": len(payload.get('deleted_items', []))
+            }
         }), 200
-
+        
     except Exception as e:
-        app.logger.error(f"Drive upload failed: {e}")
-        return jsonify({"error": "drive upload failed", "detail": str(e)}), 500
+        app.logger.error(f"Error handling changes: {e}")
+        return jsonify({
+            "error": "Failed to process changes",
+            "detail": str(e)
+        }), 500
 
-# folder_name = 上傳資料夾名稱； UPLOAD_FOLDER = 上傳drive資料夾位置
-def upload_folder_to_drive(folder_name, UPLOAD_FOLDER):
+# 處理新增檔案事件
+@app.route("/api/v1/event/added_files", methods=["POST"])
+def handle_added_files():
+    """
+    接收 client 送來的新增檔案事件，更新 tree.json
+    """
     try:
-        folder_metadata = {
-            "name": folder_name,
-            "mimeType": "application/vnd.google-apps.folder",
-            "parents": [UPLOAD_FOLDER]
-        }
-        folder = drive_service.files().create(
-            body=folder_metadata,
-            fields="id",
-            supportsAllDrives=True
-        ).execute()
-        # folder.get("id")為該新創建資料夾的資料夾ID
-        app.logger.info(f"Created Drive folder: id={folder.get('id')}")
+        payload = request.get_json(force=True)
+        added_items = payload.get('added_items', [])
+        app.logger.info(f"Received added files: {len(added_items)} files")
+        
+        # 讀取現有的 tree.json
+        if os.path.exists(TREE_JSON_PATH):
+            with open(TREE_JSON_PATH, 'r', encoding='utf-8') as f:
+                tree_data = json.load(f)
+        else:
+            tree_data = {}
+        
+        # 更新 tree.json - 只處理新增項目
+        changes_payload = {"added_items": added_items, "modified_items": [], "deleted_items": []}
+        updated_tree = update_tree_with_changes(tree_data, changes_payload)
+        
+        # 儲存更新後的 tree.json
+        with open(TREE_JSON_PATH, 'w', encoding='utf-8') as f:
+            json.dump(updated_tree, f, indent=2, ensure_ascii=False)
+        
+        app.logger.info(f"Updated tree.json with {len(added_items)} added files")
+        
+        # TODO: 未來可以在這裡添加其他處理邏輯
+        # 例如：
+        # - 備份新增檔案到 Google Drive
+        # - 掃描新增檔案是否為惡意軟體
+        # - 記錄新增檔案的審計日誌
+        
         return jsonify({
-            "status": "folder_created",
-            "local_path": folder_name,
-            "drive_folder_id": folder.get("id")
+            "status": "success",
+            "message": "Added files processed successfully",
+            "files_added": len(added_items)
         }), 200
+        
     except Exception as e:
-        app.logger.error(f"Drive folder creation failed: {e}")
-        return jsonify({"error": "drive folder creation failed", "detail": str(e)}), 500
+        app.logger.error(f"Error handling added files: {e}")
+        return jsonify({
+            "error": "Failed to process added files",
+            "detail": str(e)
+        }), 500
+
+# 處理修改檔案事件
+@app.route("/api/v1/event/modified_files", methods=["POST"])
+def handle_modified_files():
+    """
+    接收 client 送來的修改檔案事件，更新 tree.json
+    """
+    try:
+        payload = request.get_json(force=True)
+        modified_items = payload.get('modified_items', [])
+        app.logger.info(f"Received modified files: {len(modified_items)} files")
+        
+        # 讀取現有的 tree.json
+        if os.path.exists(TREE_JSON_PATH):
+            with open(TREE_JSON_PATH, 'r', encoding='utf-8') as f:
+                tree_data = json.load(f)
+        else:
+            tree_data = {}
+        
+        # 更新 tree.json - 只處理修改項目
+        changes_payload = {"added_items": [], "modified_items": modified_items, "deleted_items": []}
+        updated_tree = update_tree_with_changes(tree_data, changes_payload)
+        
+        # 儲存更新後的 tree.json
+        with open(TREE_JSON_PATH, 'w', encoding='utf-8') as f:
+            json.dump(updated_tree, f, indent=2, ensure_ascii=False)
+        
+        app.logger.info(f"Updated tree.json with {len(modified_items)} modified files")
+        
+        # TODO: 未來可以在這裡添加其他處理邏輯
+        # 例如：
+        # - 備份修改前的檔案到 Google Drive
+        # - 檢查修改是否為勒索軟體行為
+        # - 記錄檔案修改的審計日誌
+        
+        return jsonify({
+            "status": "success",
+            "message": "Modified files processed successfully",
+            "files_modified": len(modified_items)
+        }), 200
+        
+    except Exception as e:
+        app.logger.error(f"Error handling modified files: {e}")
+        return jsonify({
+            "error": "Failed to process modified files",
+            "detail": str(e)
+        }), 500
+
+# 處理刪除檔案事件
+@app.route("/api/v1/event/deleted_files", methods=["POST"])
+def handle_deleted_files():
+    """
+    接收 client 送來的刪除檔案事件，更新 tree.json
+    """
+    try:
+        payload = request.get_json(force=True)
+        deleted_items = payload.get('deleted_items', [])
+        app.logger.info(f"Received deleted files: {len(deleted_items)} files")
+        
+        # 讀取現有的 tree.json
+        if os.path.exists(TREE_JSON_PATH):
+            with open(TREE_JSON_PATH, 'r', encoding='utf-8') as f:
+                tree_data = json.load(f)
+        else:
+            tree_data = {}
+        
+        # 更新 tree.json - 只處理刪除項目
+        changes_payload = {"added_items": [], "modified_items": [], "deleted_items": deleted_items}
+        updated_tree = update_tree_with_changes(tree_data, changes_payload)
+        
+        # 儲存更新後的 tree.json
+        with open(TREE_JSON_PATH, 'w', encoding='utf-8') as f:
+            json.dump(updated_tree, f, indent=2, ensure_ascii=False)
+        
+        app.logger.info(f"Updated tree.json with {len(deleted_items)} deleted files")
+        
+        # TODO: 未來可以在這裡添加其他處理邏輯
+        # 例如：
+        # - 從 Google Drive 恢復被刪除的檔案
+        # - 檢查是否為大量檔案刪除（勒索軟體特徵）
+        # - 記錄檔案刪除的審計日誌
+        
+        return jsonify({
+            "status": "success",
+            "message": "Deleted files processed successfully",
+            "files_deleted": len(deleted_items)
+        }), 200
+        
+    except Exception as e:
+        app.logger.error(f"Error handling deleted files: {e}")
+        return jsonify({
+            "error": "Failed to process deleted files",
+            "detail": str(e)
+        }), 500
 
 if __name__ == "__main__":
     # debug=True 僅開發時使用
