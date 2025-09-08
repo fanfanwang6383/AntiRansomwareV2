@@ -62,21 +62,21 @@ def is_encrypted(file_path):
         print(f"檢查加密時發生錯誤: {e}")
         return True
 
-def findTamperedFiles(added_items, modified_items):
+def findTamperedFiles(root_path, added_items, modified_items):
     """
     找出被竄改的檔案
     """
     tampered_files = []
     for item in added_items:
         if item['type'] == 'file':
-            if is_suspicious_file(item['path']):
+            if is_suspicious_file(root_path +'/'+ item['path']):
                 tampered_files.append(item['path'])
         elif item['type'] == 'folder':
             print(f"新增資料夾: {item['path']}")
 
     for item in modified_items:
         if item['type'] == 'file':
-            if is_suspicious_file(item['path']):
+            if is_suspicious_file(root_path +'/'+ item['path']):
                 tampered_files.append(item['path'])
 
     return tampered_files

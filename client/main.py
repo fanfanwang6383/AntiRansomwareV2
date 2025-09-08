@@ -68,7 +68,7 @@ if __name__ == "__main__":
             print(f"  - {item['type']}: {item['path']}")
 
 
-        tampered_files = findTamperedFiles(added_items, modified_items)
+        tampered_files = findTamperedFiles(monitor_path, added_items, modified_items)
         if tampered_files or deleted_items:
             print("發現可疑檔案")
             print(tampered_files)
