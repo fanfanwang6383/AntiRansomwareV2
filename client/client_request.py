@@ -6,6 +6,7 @@ from config_manager import *
 
 config = load_config()
 
+monitor_path = config["client"]["MONITOR_PATH"]
 SERVER_IP = config['server']['SERVER_IP']
 SERVER_PORT = config['server']['SERVER_PORT']
 BASE_API_URL = f"http://{SERVER_IP}:{SERVER_PORT}/api/v1/event"
@@ -121,18 +122,32 @@ def get_tree_from_server():
 def send_added_files_to_server(added_items):
     """
     發送新增檔案事件給server
+    同時上傳檔案和metadata
     """
-    payload = {
+    files = []
+    
+    # 對每個新增項目處理檔案上傳
+    for item in added_items:
+        if item['type'] == 'file':
+            file_path = os.path.join(monitor_path, item['path'])
+            if os.path.exists(file_path):
+                files.append(
+                    ('files', (item['path'], open(file_path, 'rb')))
+                )
+
+    # 準備metadata
+    metadata = {
         "added_items": added_items,
         "timestamp": int(time.time())
     }
     
     try:
+        # 移除 Content-Type header，讓 requests 自動設定
         resp = requests.post(
             f"{BASE_API_URL}/added_files",
-            headers={"Content-Type": "application/json"},
-            data=json.dumps(payload),
-            timeout=10
+            files=files,
+            data={'metadata': json.dumps(metadata)},
+            timeout=30  # 增加timeout以處理多個檔案上傳
         )
         resp.raise_for_status()
         result = resp.json()

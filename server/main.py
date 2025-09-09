@@ -221,11 +221,35 @@ def handle_changes():
 @app.route("/api/v1/event/added_files", methods=["POST"])
 def handle_added_files():
     """
-    接收 client 送來的新增檔案事件，更新 tree.json
+    接收 client 送來的新增檔案事件，更新 tree.json 並儲存檔案
     """
     try:
-        payload = request.get_json(force=True)
-        added_items = payload.get('added_items', [])
+        # 檢查請求類型
+        if request.content_type and 'multipart/form-data' in request.content_type:
+            # 處理檔案上傳和metadata
+            uploaded_files = request.files.getlist('files')
+            metadata_str = request.form.get('metadata')
+            
+            app.logger.info(f"Received files: {[f.filename for f in uploaded_files]}")
+            app.logger.info(f"Received metadata: {metadata_str}")
+            
+            if metadata_str:
+                try:
+                    metadata = json.loads(metadata_str)
+                    added_items = metadata.get('added_items', [])
+                except json.JSONDecodeError as e:
+                    app.logger.error(f"Failed to parse metadata JSON: {e}")
+                    raise
+            else:
+                added_items = []
+        
+        # 加密上傳的檔案後上傳drive
+        for file in uploaded_files:
+            if file.filename:
+                safe_filename = secure_filename(file.filename)
+                save_path = os.path.join(TEMP_DIRECTORY, safe_filename)
+                file.save(save_path)
+                app.logger.info(f"Saved file: {save_path}")
         app.logger.info(f"Received added files: {len(added_items)} files")
         
         # 讀取現有的 tree.json
